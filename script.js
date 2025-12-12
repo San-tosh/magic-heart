@@ -361,19 +361,45 @@ async function setupHandTracking() {
         return;
     }
 
-    // Initialize MediaPipe HandLandmarker
-    const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
-    );
-
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
-            delegate: "GPU"
-        },
-        runningMode: "VIDEO",
-        numHands: 1
-    });
+    // Initialize MediaPipe HandLandmarker with robust fallback
+    try {
+        const vision = await FilesetResolver.forVisionTasks(
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+        );
+        
+        // Try GPU first, fallback to CPU if needed
+        try {
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 1
+            });
+        } catch (gpuError) {
+            console.warn("GPU init failed, falling back to CPU", gpuError);
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    delegate: "CPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 1
+            });
+        }
+    } catch (error) {
+        console.error("MediaPipe initialization error:", error);
+        // Display error on screen for debugging
+        const errDiv = document.createElement('div');
+        errDiv.style.position = 'absolute';
+        errDiv.style.top = '10px';
+        errDiv.style.left = '10px';
+        errDiv.style.color = 'red';
+        errDiv.style.background = 'rgba(0,0,0,0.8)';
+        errDiv.innerText = "Tracking Error: " + error.message;
+        document.body.appendChild(errDiv);
+    }
 }
 
 function onWindowResize() {
@@ -407,10 +433,14 @@ function animate() {
 
     // Hand Tracking Logic
     if (handLandmarker && video && video.currentTime !== lastVideoTime) {
-        lastVideoTime = video.currentTime;
-        const results = handLandmarker.detectForVideo(video, lastVideoTime);
+        // Ensure video is playing and has data
+        if (video.readyState >= 2) {
+            lastVideoTime = video.currentTime;
+            
+            // Run detection
+            const results = handLandmarker.detectForVideo(video, performance.now());
 
-        if (results.landmarks && results.landmarks.length > 0) {
+            if (results.landmarks && results.landmarks.length > 0) {
             const landmarks = results.landmarks[0];
             
             // Thumb tip (4) and Index finger tip (8)
