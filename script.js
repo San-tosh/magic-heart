@@ -60,15 +60,19 @@ async function init() {
         console.log("Hand tracking ready");
     }).catch(err => {
         console.error("Hand tracking failed:", err);
-        // Optional: alert("Gesture control unavailable: " + err.message);
+    }).finally(() => {
+        // Remove loading text regardless of success/fail
+        const loadingEl = document.getElementById('loading');
+        if (loadingEl) loadingEl.style.opacity = '0';
     });
     
-    // Remove loading text immediately (or change it to "Loading Camera...")
-    const loadingEl = document.getElementById('loading');
-    if (loadingEl) loadingEl.innerText = "Loading Hand Tracking...";
+    // Fallback: Remove loading text after 3s anyway if promise hangs
     setTimeout(() => {
-        if (loadingEl) loadingEl.style.opacity = '0';
-    }, 3000); // Hide text after 3s anyway
+        const loadingEl = document.getElementById('loading');
+        if (loadingEl && loadingEl.style.opacity !== '0') {
+            loadingEl.style.opacity = '0';
+        }
+    }, 3000);
 }
 
 function createHeartParticles() {
