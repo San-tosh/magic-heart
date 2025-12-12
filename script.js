@@ -21,6 +21,32 @@ let currentPanX = 0;
 let fireworks = []; // Array to store firework particles
 let lastPinchTime = 0; // Cooldown for fireworks
 
+async function ensureFontsLoaded() {
+    // Canvas text uses whatever font is available *at draw time*.
+    // On a cold load, Google Fonts may not be ready yet -> fallback font renders.
+    if (!document.fonts || typeof document.fonts.load !== 'function') return;
+
+    const timeoutMs = 3000;
+    const fontSpec = '700 240px "Dancing Script"';
+
+    try {
+        // Kick off load + wait until it resolves (or times out).
+        await Promise.race([
+            document.fonts.load(fontSpec, "Sona Thokar Tamang"),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Font load timeout')), timeoutMs)),
+        ]);
+
+        // Some browsers benefit from also awaiting the full font set readiness.
+        await Promise.race([
+            document.fonts.ready,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Font ready timeout')), timeoutMs)),
+        ]);
+    } catch (e) {
+        // Non-fatal: we'll render with fallback fonts.
+        console.warn('Custom font not ready yet; using fallback for first render.', e);
+    }
+}
+
 async function init() {
     // 1. Setup Three.js Scene
     scene = new THREE.Scene();
@@ -39,6 +65,7 @@ async function init() {
     createHeartParticles();
 
     // 3. Create Name Label (2D Texture)
+    await ensureFontsLoaded();
     createNameLabel();
 
     // 4. Lights
@@ -52,27 +79,15 @@ async function init() {
     // 5. Handle Resize
     window.addEventListener('resize', onWindowResize);
 
-    // 6. Start Animation Immediately (Don't wait for camera)
+    // 6. Setup MediaPipe Hand Tracking
+    await setupHandTracking();
+    
+    // 7. Start Animation
     animate();
 
-    // 7. Setup MediaPipe Hand Tracking (Background)
-    setupHandTracking().then(() => {
-        console.log("Hand tracking ready");
-    }).catch(err => {
-        console.error("Hand tracking failed:", err);
-    }).finally(() => {
-        // Remove loading text regardless of success/fail
-        const loadingEl = document.getElementById('loading');
-        if (loadingEl) loadingEl.style.opacity = '0';
-    });
-    
-    // Fallback: Remove loading text after 3s anyway if promise hangs
-    setTimeout(() => {
-        const loadingEl = document.getElementById('loading');
-        if (loadingEl && loadingEl.style.opacity !== '0') {
-            loadingEl.style.opacity = '0';
-        }
-    }, 3000);
+    // Remove loading text
+    const loadingEl = document.getElementById('loading');
+    if (loadingEl) loadingEl.style.opacity = '0';
 }
 
 function createHeartParticles() {
@@ -345,16 +360,13 @@ async function setupHandTracking() {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: {
                 facingMode: 'user',
-                width: { ideal: isMobile ? 480 : 640 }, // Lower res for stability
-                height: { ideal: isMobile ? 360 : 480 },
+                width: { ideal: isMobile ? 640 : 320 },
+                height: { ideal: isMobile ? 480 : 240 },
             },
         });
         video.srcObject = stream;
         await new Promise((resolve) => {
             video.onloadedmetadata = () => {
-                // Critical for MediaPipe on mobile: set explicit video dimensions
-                video.width = video.videoWidth;
-                video.height = video.videoHeight;
                 video.play();
                 resolve();
             };
@@ -365,45 +377,19 @@ async function setupHandTracking() {
         return;
     }
 
-    // Initialize MediaPipe HandLandmarker with robust fallback
-    try {
-        const vision = await FilesetResolver.forVisionTasks(
-            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
-        );
-        
-        // Try GPU first, fallback to CPU if needed
-        try {
-            handLandmarker = await HandLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
-                    delegate: "GPU"
-                },
-                runningMode: "VIDEO",
-                numHands: 1
-            });
-        } catch (gpuError) {
-            console.warn("GPU init failed, falling back to CPU", gpuError);
-            handLandmarker = await HandLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
-                    delegate: "CPU"
-                },
-                runningMode: "VIDEO",
-                numHands: 1
-            });
-        }
-    } catch (error) {
-        console.error("MediaPipe initialization error:", error);
-        // Display error on screen for debugging
-        const errDiv = document.createElement('div');
-        errDiv.style.position = 'absolute';
-        errDiv.style.top = '10px';
-        errDiv.style.left = '10px';
-        errDiv.style.color = 'red';
-        errDiv.style.background = 'rgba(0,0,0,0.8)';
-        errDiv.innerText = "Tracking Error: " + error.message;
-        document.body.appendChild(errDiv);
-    }
+    // Initialize MediaPipe HandLandmarker
+    const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+    );
+
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+            delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+    });
 }
 
 function onWindowResize() {
@@ -437,14 +423,10 @@ function animate() {
 
     // Hand Tracking Logic
     if (handLandmarker && video && video.currentTime !== lastVideoTime) {
-        // Ensure video is playing and has data
-        if (video.readyState >= 2) {
-            lastVideoTime = video.currentTime;
-            
-            // Run detection
-            const results = handLandmarker.detectForVideo(video, performance.now());
+        lastVideoTime = video.currentTime;
+        const results = handLandmarker.detectForVideo(video, lastVideoTime);
 
-            if (results.landmarks && results.landmarks.length > 0) {
+        if (results.landmarks && results.landmarks.length > 0) {
             const landmarks = results.landmarks[0];
             
             // Thumb tip (4) and Index finger tip (8)
