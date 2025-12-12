@@ -52,15 +52,23 @@ async function init() {
     // 5. Handle Resize
     window.addEventListener('resize', onWindowResize);
 
-    // 6. Setup MediaPipe Hand Tracking
-    await setupHandTracking();
-    
-    // 7. Start Animation
+    // 6. Start Animation Immediately (Don't wait for camera)
     animate();
 
-    // Remove loading text
+    // 7. Setup MediaPipe Hand Tracking (Background)
+    setupHandTracking().then(() => {
+        console.log("Hand tracking ready");
+    }).catch(err => {
+        console.error("Hand tracking failed:", err);
+        // Optional: alert("Gesture control unavailable: " + err.message);
+    });
+    
+    // Remove loading text immediately (or change it to "Loading Camera...")
     const loadingEl = document.getElementById('loading');
-    if (loadingEl) loadingEl.style.opacity = '0';
+    if (loadingEl) loadingEl.innerText = "Loading Hand Tracking...";
+    setTimeout(() => {
+        if (loadingEl) loadingEl.style.opacity = '0';
+    }, 3000); // Hide text after 3s anyway
 }
 
 function createHeartParticles() {
@@ -333,13 +341,16 @@ async function setupHandTracking() {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: {
                 facingMode: 'user',
-                width: { ideal: isMobile ? 640 : 320 },
-                height: { ideal: isMobile ? 480 : 240 },
+                width: { ideal: isMobile ? 480 : 640 }, // Lower res for stability
+                height: { ideal: isMobile ? 360 : 480 },
             },
         });
         video.srcObject = stream;
         await new Promise((resolve) => {
             video.onloadedmetadata = () => {
+                // Critical for MediaPipe on mobile: set explicit video dimensions
+                video.width = video.videoWidth;
+                video.height = video.videoHeight;
                 video.play();
                 resolve();
             };
